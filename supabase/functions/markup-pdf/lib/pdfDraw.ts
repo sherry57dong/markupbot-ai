@@ -1,7 +1,5 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFString } from "pdf-lib";
 import type { BoundingBox, EditInstruction, PageLayout } from "./types.ts";
-
-const RED = rgb(0.85, 0.1, 0.1);
 
 function locateTextOnPage(layout: PageLayout, targetText: string): BoundingBox | null {
   const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -38,6 +36,72 @@ function locateTextOnPage(layout: PageLayout, targetText: string): BoundingBox |
   };
 }
 
+function pushAnnotation(
+  pdfDoc: PDFDocument,
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  annotDict: Record<string, unknown>,
+): void {
+  const ref = pdfDoc.context.register(pdfDoc.context.obj(annotDict));
+
+  const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+  if (existing) {
+    existing.push(ref);
+  } else {
+    page.node.set(PDFName.of("Annots"), pdfDoc.context.obj([ref]));
+  }
+}
+
+// Renders as a red strikethrough in Adobe Acrobat / Preview / any standard PDF viewer.
+// Clicking the annotation opens a popup showing the suggested replacement text.
+// The human reviewer can delete, accept, or modify it in Acrobat.
+function addStrikeoutAnnotation(
+  pdfDoc: PDFDocument,
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  box: BoundingBox,
+  replacementText: string,
+): void {
+  const { x, y, width, height } = box;
+
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("StrikeOut"),
+    // Bounding rectangle [llx, lly, urx, ury] in PDF user-space (y-up)
+    Rect: [x, y, x + width, y + height],
+    // QuadPoints order: upper-left, upper-right, lower-left, lower-right
+    QuadPoints: [x, y + height, x + width, y + height, x, y, x + width, y],
+    Contents: PDFString.of(`Replace with: ${replacementText}`),
+    T: PDFString.of("MarkupBot AI"),
+    C: [1, 0, 0], // red
+    F: PDFNumber.of(4), // printable flag
+    CA: PDFNumber.of(1), // full opacity
+  });
+}
+
+// Renders as a standard yellow sticky-note icon in the margin.
+// Click to expand and read the comment. Fully editable in Acrobat.
+function addNoteAnnotation(
+  pdfDoc: PDFDocument,
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  box: BoundingBox,
+  noteText: string,
+): void {
+  const noteSize = 18;
+  const { width: pageWidth } = page.getSize();
+  const noteX = Math.min(box.x + box.width + 14, pageWidth - noteSize - 6);
+
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("Text"),
+    Rect: [noteX, box.y, noteX + noteSize, box.y + noteSize],
+    Contents: PDFString.of(noteText),
+    T: PDFString.of("MarkupBot AI"),
+    Name: PDFName.of("Comment"),
+    C: [1, 0.82, 0], // amber — matches Acrobat's default sticky-note colour
+    F: PDFNumber.of(4),
+    Open: false,
+  });
+}
+
 export async function applyMarkupToPdf(
   originalPdfBytes: Uint8Array,
   pageLayouts: PageLayout[],
@@ -45,7 +109,6 @@ export async function applyMarkupToPdf(
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.load(originalPdfBytes);
   const pages = pdfDoc.getPages();
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
   for (const edit of edits) {
     let box: BoundingBox | null = null;
@@ -55,75 +118,18 @@ export async function applyMarkupToPdf(
     }
 
     if (!box) {
-      console.warn(`Could not locate on any page: "${edit.target_text}"`);
+      console.warn(`Could not locate: "${edit.target_text}"`);
       continue;
     }
 
     const page = pages[box.pageIndex];
 
     if (edit.action_type === "strikeout_and_replace") {
-      drawStrikeoutAndReplacement(page, box, edit.replacement_text, font);
+      addStrikeoutAnnotation(pdfDoc, page, box, edit.replacement_text);
     } else {
-      drawMarginNote(page, box, edit.replacement_text, font);
+      addNoteAnnotation(pdfDoc, page, box, edit.replacement_text);
     }
   }
 
   return pdfDoc.save();
-}
-
-function drawStrikeoutAndReplacement(
-  page: ReturnType<PDFDocument["getPages"]>[number],
-  box: BoundingBox,
-  replacementText: string,
-  font: Awaited<ReturnType<PDFDocument["embedFont"]>>,
-) {
-  // Red line through the middle of the original text
-  const strikeY = box.y + box.height / 2;
-  page.drawLine({
-    start: { x: box.x, y: strikeY },
-    end: { x: box.x + box.width, y: strikeY },
-    thickness: Math.max(1, box.fontSizeEstimate * 0.08),
-    color: RED,
-  });
-
-  // Replacement text drawn above the struck-through original
-  const replacementFontSize = Math.max(6, box.fontSizeEstimate * 0.85);
-  page.drawText(replacementText, {
-    x: box.x,
-    y: box.y + box.height * 1.15,
-    size: replacementFontSize,
-    font,
-    color: RED,
-    maxWidth: Math.max(box.width * 2.5, 200),
-  });
-}
-
-function drawMarginNote(
-  page: ReturnType<PDFDocument["getPages"]>[number],
-  box: BoundingBox,
-  noteText: string,
-  font: Awaited<ReturnType<PDFDocument["embedFont"]>>,
-) {
-  const { width: pageWidth } = page.getSize();
-  const noteFontSize = Math.max(7, box.fontSizeEstimate * 0.75);
-
-  // Dashed underline to mark the anchor point
-  page.drawLine({
-    start: { x: box.x, y: box.y - 2 },
-    end: { x: box.x + box.width, y: box.y - 2 },
-    thickness: 1,
-    color: RED,
-    dashArray: [2, 2],
-  });
-
-  // Note in the right margin, level with the anchor
-  const marginX = Math.min(box.x + box.width + 12, pageWidth - 140);
-  page.drawText(`✎ ${noteText}`, {
-    x: marginX,
-    y: box.y,
-    size: noteFontSize,
-    font,
-    color: RED,
-    maxWidth: 130,
-  });
 }
