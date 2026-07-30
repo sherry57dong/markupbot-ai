@@ -2,6 +2,7 @@
   "imports": {
     "pdf-lib": "npm:pdf-lib@1.17.1",
     "unpdf": "npm:unpdf@0.12.1",
+    "openai": "npm:openai@4.77.0",
     "@anthropic-ai/sdk": "npm:@anthropic-ai/sdk@0.65.0",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.45.4"
   }

@@ -1,9 +1,6 @@
+import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { EditInstruction } from "./types.ts";
-
-const anthropic = new Anthropic({
-  apiKey: Deno.env.get("ANTHROPIC_API_KEY"),
-});
 
 const EDIT_SCHEMA = {
   type: "object",
@@ -51,11 +48,43 @@ CRITICAL RULES:
 - If the feedback is a general comment that doesn't map to a specific text swap, use action_type "margin_note".
 - If a piece of feedback cannot be confidently mapped to text in the document, omit it rather than guessing.`;
 
-export async function generateEditInstructions(
-  documentText: string,
-  feedbackText: string,
-): Promise<EditInstruction[]> {
-  const response = await anthropic.messages.create({
+function buildUserMessage(documentText: string, feedbackText: string): string {
+  return [
+    `<document_text>\n${documentText}\n</document_text>`,
+    `<client_feedback>\n${feedbackText}\n</client_feedback>`,
+  ].join("\n\n");
+}
+
+async function generateWithOpenAI(documentText: string, feedbackText: string): Promise<EditInstruction[]> {
+  const client = new OpenAI({ apiKey: Deno.env.get("OPENAI_API_KEY") });
+
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: buildUserMessage(documentText, feedbackText) },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "edit_instructions",
+        strict: true,
+        schema: EDIT_SCHEMA,
+      },
+    },
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned empty response");
+
+  const parsed = JSON.parse(content) as { edits: EditInstruction[] };
+  return parsed.edits;
+}
+
+async function generateWithAnthropic(documentText: string, feedbackText: string): Promise<EditInstruction[]> {
+  const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") });
+
+  const response = await client.messages.create({
     model: "claude-sonnet-5",
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
@@ -63,15 +92,7 @@ export async function generateEditInstructions(
       effort: "medium",
       format: { type: "json_schema", schema: EDIT_SCHEMA },
     },
-    messages: [
-      {
-        role: "user",
-        content: [
-          `<document_text>\n${documentText}\n</document_text>`,
-          `<client_feedback>\n${feedbackText}\n</client_feedback>`,
-        ].join("\n\n"),
-      },
-    ],
+    messages: [{ role: "user", content: buildUserMessage(documentText, feedbackText) }],
   });
 
   if (response.stop_reason === "refusal") {
@@ -85,4 +106,18 @@ export async function generateEditInstructions(
 
   const parsed = JSON.parse(textBlock.text) as { edits: EditInstruction[] };
   return parsed.edits;
+}
+
+export async function generateEditInstructions(
+  documentText: string,
+  feedbackText: string,
+): Promise<EditInstruction[]> {
+  if (Deno.env.get("OPENAI_API_KEY")) {
+    try {
+      return await generateWithOpenAI(documentText, feedbackText);
+    } catch (err) {
+      console.warn("OpenAI failed, falling back to Anthropic:", err instanceof Error ? err.message : err);
+    }
+  }
+  return await generateWithAnthropic(documentText, feedbackText);
 }
