@@ -19,7 +19,7 @@ export interface PageLayout {
 export interface EditInstruction {
   target_text: string;
   replacement_text: string;
-  action_type: "strikeout_and_replace" | "margin_note";
+  action_type: "strikeout_only" | "strikeout_and_replace" | "insert" | "margin_note";
 }
 
 export interface BoundingBox {

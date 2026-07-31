@@ -1,6 +1,8 @@
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFString } from "pdf-lib";
 import type { BoundingBox, EditInstruction, PageLayout } from "./types.ts";
 
+// ── Text locator ──────────────────────────────────────────────────────────────
+
 function locateTextOnPage(layout: PageLayout, targetText: string): BoundingBox | null {
   const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
   const haystack = normalize(layout.fullText);
@@ -36,13 +38,14 @@ function locateTextOnPage(layout: PageLayout, targetText: string): BoundingBox |
   };
 }
 
+// ── Annotation helpers ────────────────────────────────────────────────────────
+
 function pushAnnotation(
   pdfDoc: PDFDocument,
   page: ReturnType<PDFDocument["getPages"]>[number],
-  annotDict: Record<string, unknown>,
+  dict: Record<string, unknown>,
 ): void {
-  const ref = pdfDoc.context.register(pdfDoc.context.obj(annotDict));
-
+  const ref = pdfDoc.context.register(pdfDoc.context.obj(dict));
   const existing = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
   if (existing) {
     existing.push(ref);
@@ -51,35 +54,123 @@ function pushAnnotation(
   }
 }
 
-// Renders as a red strikethrough in Adobe Acrobat / Preview / any standard PDF viewer.
-// Clicking the annotation opens a popup showing the suggested replacement text.
-// The human reviewer can delete, accept, or modify it in Acrobat.
-function addStrikeoutAnnotation(
+function quadPoints(x: number, y: number, w: number, h: number): number[] {
+  // upper-left, upper-right, lower-left, lower-right (PDF y-up)
+  return [x, y + h, x + w, y + h, x, y, x + w, y];
+}
+
+// ── Four annotation types ─────────────────────────────────────────────────────
+
+/**
+ * Red strikeout — pure deletion, no replacement.
+ * Popup shows "DELETE" so the reviewer knows to cut this text.
+ */
+function addStrikeoutOnly(
+  pdfDoc: PDFDocument,
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  box: BoundingBox,
+): void {
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("StrikeOut"),
+    Rect: [box.x, box.y, box.x + box.width, box.y + box.height],
+    QuadPoints: quadPoints(box.x, box.y, box.width, box.height),
+    Contents: PDFString.of("DELETE"),
+    T: PDFString.of("MarkupBot AI"),
+    C: [1, 0, 0],
+    F: PDFNumber.of(4),
+  });
+}
+
+/**
+ * Red strikeout on the old text + red FreeText above showing the new text.
+ * Matches the visual style of professional PDF redline reviews.
+ */
+function addStrikeoutAndReplace(
   pdfDoc: PDFDocument,
   page: ReturnType<PDFDocument["getPages"]>[number],
   box: BoundingBox,
   replacementText: string,
 ): void {
   const { x, y, width, height } = box;
+  const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
+  const lineH = fontSize + 3;
+  // Estimate replacement text width (rough: 0.55× font size per char)
+  const textW = Math.max(width, replacementText.length * fontSize * 0.55 + 6);
 
+  // Red strikeout on old text
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),
     Subtype: PDFName.of("StrikeOut"),
-    // Bounding rectangle [llx, lly, urx, ury] in PDF user-space (y-up)
     Rect: [x, y, x + width, y + height],
-    // QuadPoints order: upper-left, upper-right, lower-left, lower-right
-    QuadPoints: [x, y + height, x + width, y + height, x, y, x + width, y],
+    QuadPoints: quadPoints(x, y, width, height),
     Contents: PDFString.of(`Replace with: ${replacementText}`),
     T: PDFString.of("MarkupBot AI"),
-    C: [1, 0, 0], // red
-    F: PDFNumber.of(4), // printable flag
-    CA: PDFNumber.of(1), // full opacity
+    C: [1, 0, 0],
+    F: PDFNumber.of(4),
+  });
+
+  // Red FreeText floating above — shows replacement inline
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("FreeText"),
+    Rect: [x, y + height + 1, x + textW, y + height + 1 + lineH],
+    Contents: PDFString.of(replacementText),
+    T: PDFString.of("MarkupBot AI"),
+    DA: PDFString.of(`/Helv ${fontSize} Tf 0.85 0 0 rg`),
+    C: [1, 0.75, 0.75],
+    BS: pdfDoc.context.obj({ Type: PDFName.of("Border"), W: PDFNumber.of(0) }),
+    F: PDFNumber.of(4),
   });
 }
 
-// Renders as a standard yellow sticky-note icon in the margin.
-// Click to expand and read the comment. Fully editable in Acrobat.
-function addNoteAnnotation(
+/**
+ * Green caret (^) at the insertion point + green FreeText showing what to insert.
+ * Use when adding a word or phrase without deleting anything.
+ */
+function addInsert(
+  pdfDoc: PDFDocument,
+  page: ReturnType<PDFDocument["getPages"]>[number],
+  box: BoundingBox,
+  insertText: string,
+): void {
+  const { x, y, height } = box;
+  const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
+  const lineH = fontSize + 3;
+  const textW = insertText.length * fontSize * 0.55 + 6;
+  const caretW = Math.min(height * 0.7, 8);
+
+  // Caret annotation — appears as ^ symbol at insertion point
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("Caret"),
+    Rect: [x - caretW, y, x, y + height],
+    Contents: PDFString.of(`Insert: ${insertText}`),
+    T: PDFString.of("MarkupBot AI"),
+    C: [0, 0.6, 0],
+    F: PDFNumber.of(4),
+    Sy: PDFName.of("None"),
+  });
+
+  // Green FreeText above — shows the text to be inserted
+  pushAnnotation(pdfDoc, page, {
+    Type: PDFName.of("Annot"),
+    Subtype: PDFName.of("FreeText"),
+    Rect: [x - caretW, y + height + 1, x - caretW + textW, y + height + 1 + lineH],
+    Contents: PDFString.of(`^ ${insertText}`),
+    T: PDFString.of("MarkupBot AI"),
+    DA: PDFString.of(`/Helv ${fontSize} Tf 0 0.55 0 rg`),
+    C: [0.75, 1, 0.75],
+    BS: pdfDoc.context.obj({ Type: PDFName.of("Border"), W: PDFNumber.of(0) }),
+    F: PDFNumber.of(4),
+  });
+}
+
+/**
+ * Amber sticky-note icon anchored to nearby text.
+ * Use for image, layout, color, or any non-text feedback.
+ */
+function addMarginNote(
   pdfDoc: PDFDocument,
   page: ReturnType<PDFDocument["getPages"]>[number],
   box: BoundingBox,
@@ -96,11 +187,13 @@ function addNoteAnnotation(
     Contents: PDFString.of(noteText),
     T: PDFString.of("MarkupBot AI"),
     Name: PDFName.of("Comment"),
-    C: [1, 0.82, 0], // amber — matches Acrobat's default sticky-note colour
+    C: [1, 0.82, 0],
     F: PDFNumber.of(4),
     Open: false,
   });
 }
+
+// ── Main export ───────────────────────────────────────────────────────────────
 
 export async function applyMarkupToPdf(
   originalPdfBytes: Uint8Array,
@@ -124,10 +217,19 @@ export async function applyMarkupToPdf(
 
     const page = pages[box.pageIndex];
 
-    if (edit.action_type === "strikeout_and_replace") {
-      addStrikeoutAnnotation(pdfDoc, page, box, edit.replacement_text);
-    } else {
-      addNoteAnnotation(pdfDoc, page, box, edit.replacement_text);
+    switch (edit.action_type) {
+      case "strikeout_only":
+        addStrikeoutOnly(pdfDoc, page, box);
+        break;
+      case "strikeout_and_replace":
+        addStrikeoutAndReplace(pdfDoc, page, box, edit.replacement_text);
+        break;
+      case "insert":
+        addInsert(pdfDoc, page, box, edit.replacement_text);
+        break;
+      case "margin_note":
+        addMarginNote(pdfDoc, page, box, edit.replacement_text);
+        break;
     }
   }
 

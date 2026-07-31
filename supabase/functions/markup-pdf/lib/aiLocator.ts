@@ -13,15 +13,16 @@ const EDIT_SCHEMA = {
           target_text: {
             type: "string",
             description:
-              "The EXACT original string from the document. Must be a verbatim, contiguous substring — do not paraphrase or normalize whitespace.",
+              "The EXACT verbatim substring from the document to annotate. For margin_note, use the nearest text on the page as an anchor. For insert, use the word that will appear IMMEDIATELY AFTER the insertion point.",
           },
           replacement_text: {
             type: "string",
-            description: "The new text to insert in place of target_text.",
+            description:
+              "For strikeout_and_replace: the new text to show above the strikethrough. For insert: the text to insert before target_text. For strikeout_only: leave empty. For margin_note: the full comment.",
           },
           action_type: {
             type: "string",
-            enum: ["strikeout_and_replace", "margin_note"],
+            enum: ["strikeout_only", "strikeout_and_replace", "insert", "margin_note"],
           },
         },
         required: ["target_text", "replacement_text", "action_type"],
@@ -39,14 +40,41 @@ You will be given:
 1. The full extracted text of a marketing PDF (pages separated by "---PAGE BREAK---").
 2. A block of messy, informal client feedback describing desired changes.
 
-Your job is to translate the feedback into a structured list of edits.
+Your job is to translate EVERY piece of feedback into a structured list of edits. Never omit feedback.
+
+ACTION TYPES — choose exactly one per edit:
+
+"strikeout_only"
+  Use when: feedback says to DELETE, REMOVE, or CUT text with no replacement.
+  target_text: exact text to strike out
+  replacement_text: "" (empty)
+  Example: "Remove Batt Insulation" → strike out "Batt Insulation – $15 off"
+
+"strikeout_and_replace"
+  Use when: feedback changes specific text to different text.
+  target_text: the OLD text (exact verbatim from document)
+  replacement_text: the NEW text to display above the strikethrough
+  Example: "$100" → "$80": target_text="$100", replacement_text="$80"
+  Example: "energy-efficient" → "energy-efficiency": target_text="energy-efficient", replacement_text="energy-efficiency"
+
+"insert"
+  Use when: feedback adds new text WITHOUT removing anything — inserting a word or phrase between existing words.
+  target_text: the word that comes IMMEDIATELY AFTER the insertion point (so we know where to put the caret)
+  replacement_text: the text to be inserted before target_text
+  Example: insert "NEW" before "Product": target_text="Product", replacement_text="NEW "
+
+"margin_note"
+  Use when: feedback is about images, photos, graphics, layout, colors, branding, or ANY non-text element — OR when feedback is a general comment with no specific text to change.
+  NEVER omit this kind of feedback. Always include it as a margin_note.
+  target_text: the nearest text on the same page to anchor the note (pick something unique and nearby)
+  replacement_text: the full comment verbatim from the feedback
 
 CRITICAL RULES:
-- "target_text" MUST be an exact, verbatim, contiguous substring copied directly from the document text. Never invent, paraphrase, or fix typos — copy it exactly as it appears.
-- Keep target_text as SHORT as possible while still being unique enough to locate unambiguously.
-- If the feedback describes a direct wording change, use action_type "strikeout_and_replace".
-- If the feedback is a general comment that doesn't map to a specific text swap, use action_type "margin_note".
-- If a piece of feedback cannot be confidently mapped to text in the document, omit it rather than guessing.`;
+- target_text MUST be an exact, verbatim, contiguous substring from the document. Never invent or paraphrase.
+- Keep target_text as SHORT as possible while still being unique on the page.
+- For price changes like "$2 off" → "$3 off": target the price only ("$2") not the whole line.
+- If the same text appears multiple times, use the surrounding sentence context to pick the right occurrence, but target_text itself stays short.
+- NEVER omit any feedback item. If it's not a text change, use margin_note.`;
 
 function buildUserMessage(documentText: string, feedbackText: string): string {
   return [
