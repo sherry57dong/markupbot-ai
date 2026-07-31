@@ -1,4 +1,12 @@
-import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFString } from "pdf-lib";
+import {
+  PDFArray,
+  PDFDocument,
+  PDFName,
+  PDFNumber,
+  PDFString,
+  StandardFonts,
+  rgb,
+} from "pdf-lib";
 import type { BoundingBox, EditInstruction, PageLayout } from "./types.ts";
 
 // ── Text locator ──────────────────────────────────────────────────────────────
@@ -21,6 +29,28 @@ function locateTextOnPage(layout: PageLayout, targetText: string): BoundingBox |
 
   if (overlapping.length === 0) return null;
 
+  // If the match falls within a single text item and is shorter than it,
+  // estimate sub-item bounds by finding the needle's position within that item's text.
+  // This prevents a 3-word target from highlighting the whole sentence.
+  if (overlapping.length === 1) {
+    const item = overlapping[0];
+    const itemText = normalize(item.text);
+    const posInItem = itemText.indexOf(needle);
+    if (posInItem !== -1 && itemText.length > needle.length && item.width > 0) {
+      const startFrac = posInItem / itemText.length;
+      const widthFrac = needle.length / itemText.length;
+      return {
+        pageIndex: layout.pageIndex,
+        x: item.x + item.width * startFrac,
+        y: item.y,
+        width: Math.max(item.width * widthFrac, 4),
+        height: item.height,
+        fontSizeEstimate: item.height || 10,
+      };
+    }
+  }
+
+  // Multiple items (target spans lines): use their combined bounding box.
   const minX = Math.min(...overlapping.map((i) => i.x));
   const maxX = Math.max(...overlapping.map((i) => i.x + i.width));
   const minY = Math.min(...overlapping.map((i) => i.y));
@@ -59,11 +89,12 @@ function quadPoints(x: number, y: number, w: number, h: number): number[] {
   return [x, y + h, x + w, y + h, x, y, x + w, y];
 }
 
+type PDFFont = Awaited<ReturnType<PDFDocument["embedFont"]>>;
+
 // ── Four annotation types ─────────────────────────────────────────────────────
 
 /**
  * Red strikeout — pure deletion, no replacement.
- * Popup shows "DELETE" so the reviewer knows to cut this text.
  */
 function addStrikeoutOnly(
   pdfDoc: PDFDocument,
@@ -83,22 +114,22 @@ function addStrikeoutOnly(
 }
 
 /**
- * Red strikeout on the old text + red FreeText above showing the new text.
- * Matches the visual style of professional PDF redline reviews.
+ * Red strikeout on old text + red replacement text drawn directly on the page.
+ * Drawing directly (not FreeText annotation) guarantees the text is always visible.
  */
 function addStrikeoutAndReplace(
   pdfDoc: PDFDocument,
   page: ReturnType<PDFDocument["getPages"]>[number],
   box: BoundingBox,
   replacementText: string,
+  font: PDFFont,
 ): void {
   const { x, y, width, height } = box;
   const { height: pageHeight } = page.getSize();
   const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
-  const lineH = fontSize + 3;
-  const textW = Math.max(width, replacementText.length * fontSize * 0.55 + 6);
+  const lineH = fontSize + 4;
 
-  // Red strikeout on old text
+  // Red StrikeOut annotation on old text
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),
     Subtype: PDFName.of("StrikeOut"),
@@ -110,39 +141,35 @@ function addStrikeoutAndReplace(
     F: PDFNumber.of(4),
   });
 
-  // Place FreeText above the strikeout if there's room; otherwise below.
-  // (PDF y-axis goes up, so "above" means higher y — if that exceeds the page, flip.)
-  const fitsAbove = y + height + 1 + lineH <= pageHeight;
-  const ftY = fitsAbove ? y + height + 1 : Math.max(0, y - lineH - 1);
+  // Draw replacement text directly on the page — always rendered,
+  // unlike FreeText annotations which require an appearance stream to be visible.
+  // Place above the strikeout if there's room; otherwise place below.
+  const fitsAbove = y + height + 2 + fontSize <= pageHeight;
+  const textY = fitsAbove ? y + height + 2 : Math.max(2, y - lineH);
 
-  pushAnnotation(pdfDoc, page, {
-    Type: PDFName.of("Annot"),
-    Subtype: PDFName.of("FreeText"),
-    Rect: [x, ftY, x + textW, ftY + lineH],
-    Contents: PDFString.of(replacementText),
-    T: PDFString.of("MarkupBot AI"),
-    DA: PDFString.of(`/Helv ${fontSize} Tf 0.85 0 0 rg`),
-    C: [1, 0.75, 0.75],
-    BS: pdfDoc.context.obj({ Type: PDFName.of("Border"), W: PDFNumber.of(0) }),
-    F: PDFNumber.of(4),
+  page.drawText(replacementText, {
+    x,
+    y: textY,
+    size: fontSize,
+    font,
+    color: rgb(0.85, 0, 0),
   });
 }
 
 /**
- * Green caret (^) at the insertion point + green FreeText showing what to insert.
- * Use when adding a word or phrase without deleting anything.
+ * Green caret at insertion point + green text drawn directly on the page.
  */
 function addInsert(
   pdfDoc: PDFDocument,
   page: ReturnType<PDFDocument["getPages"]>[number],
   box: BoundingBox,
   insertText: string,
+  font: PDFFont,
 ): void {
   const { x, y, height } = box;
   const { height: pageHeight } = page.getSize();
   const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
-  const lineH = fontSize + 3;
-  const textW = insertText.length * fontSize * 0.55 + 6;
+  const lineH = fontSize + 4;
   const caretW = Math.min(height * 0.7, 8);
 
   // Caret annotation — appears as ^ symbol at insertion point
@@ -157,26 +184,22 @@ function addInsert(
     Sy: PDFName.of("None"),
   });
 
-  // Place FreeText above the caret if there's room; otherwise below
-  const fitsAbove = y + height + 1 + lineH <= pageHeight;
-  const ftY = fitsAbove ? y + height + 1 : Math.max(0, y - lineH - 1);
+  // Draw insert text directly on the page
+  const fitsAbove = y + height + 2 + fontSize <= pageHeight;
+  const textY = fitsAbove ? y + height + 2 : Math.max(2, y - lineH);
 
-  pushAnnotation(pdfDoc, page, {
-    Type: PDFName.of("Annot"),
-    Subtype: PDFName.of("FreeText"),
-    Rect: [x - caretW, ftY, x - caretW + textW, ftY + lineH],
-    Contents: PDFString.of(`^ ${insertText}`),
-    T: PDFString.of("MarkupBot AI"),
-    DA: PDFString.of(`/Helv ${fontSize} Tf 0 0.55 0 rg`),
-    C: [0.75, 1, 0.75],
-    BS: pdfDoc.context.obj({ Type: PDFName.of("Border"), W: PDFNumber.of(0) }),
-    F: PDFNumber.of(4),
+  page.drawText(`^ ${insertText}`, {
+    x: x - caretW,
+    y: textY,
+    size: fontSize,
+    font,
+    color: rgb(0, 0.55, 0),
   });
 }
 
 /**
- * Amber sticky-note icon anchored to nearby text.
- * Use for image, layout, color, or any non-text feedback.
+ * Amber sticky-note icon pinned to the right gutter of the page.
+ * Always visible regardless of where the anchor text falls.
  */
 function addMarginNote(
   pdfDoc: PDFDocument,
@@ -186,8 +209,6 @@ function addMarginNote(
 ): void {
   const noteSize = 18;
   const { width: pageWidth } = page.getSize();
-  // Always pin to the right gutter so the icon is always visible,
-  // regardless of where the anchor text falls on the page.
   const noteX = pageWidth - noteSize - 6;
 
   pushAnnotation(pdfDoc, page, {
@@ -210,7 +231,10 @@ export async function applyMarkupToPdf(
   pageLayouts: PageLayout[],
   edits: EditInstruction[],
 ): Promise<Uint8Array> {
+  console.log("AI edits to apply:", JSON.stringify(edits));
+
   const pdfDoc = await PDFDocument.load(originalPdfBytes);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages = pdfDoc.getPages();
 
   for (const edit of edits) {
@@ -232,10 +256,10 @@ export async function applyMarkupToPdf(
         addStrikeoutOnly(pdfDoc, page, box);
         break;
       case "strikeout_and_replace":
-        addStrikeoutAndReplace(pdfDoc, page, box, edit.replacement_text);
+        addStrikeoutAndReplace(pdfDoc, page, box, edit.replacement_text, font);
         break;
       case "insert":
-        addInsert(pdfDoc, page, box, edit.replacement_text);
+        addInsert(pdfDoc, page, box, edit.replacement_text, font);
         break;
       case "margin_note":
         addMarginNote(pdfDoc, page, box, edit.replacement_text);
