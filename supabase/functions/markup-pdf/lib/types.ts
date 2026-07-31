@@ -20,6 +20,7 @@ export interface EditInstruction {
   target_text: string;
   replacement_text: string;
   action_type: "strikeout_only" | "strikeout_and_replace" | "insert" | "margin_note";
+  page_hint: number | null;
 }
 
 export interface BoundingBox {
