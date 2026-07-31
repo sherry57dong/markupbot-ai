@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { EditInstruction } from "./types.ts";
 
@@ -55,26 +54,23 @@ ACTION TYPES — choose exactly one per edit:
   target_text: the OLD text (exact verbatim from document)
   replacement_text: the NEW text to display above the strikethrough
   Example: "$100" → "$80": target_text="$100", replacement_text="$80"
-  Example: "energy-efficient" → "energy-efficiency": target_text="energy-efficient", replacement_text="energy-efficiency"
 
 "insert"
-  Use when: feedback adds new text WITHOUT removing anything — inserting a word or phrase between existing words.
-  target_text: the word that comes IMMEDIATELY AFTER the insertion point (so we know where to put the caret)
+  Use when: feedback adds new text WITHOUT removing anything.
+  target_text: the word IMMEDIATELY AFTER the insertion point
   replacement_text: the text to be inserted before target_text
-  Example: insert "NEW" before "Product": target_text="Product", replacement_text="NEW "
 
 "margin_note"
-  Use when: feedback is about images, photos, graphics, layout, colors, branding, or ANY non-text element — OR when feedback is a general comment with no specific text to change.
+  Use when: feedback is about images, photos, graphics, layout, colors, branding, or ANY non-text element.
   NEVER omit this kind of feedback. Always include it as a margin_note.
-  target_text: the nearest text on the same page to anchor the note (pick something unique and nearby)
+  target_text: the nearest text on the same page to anchor the note
   replacement_text: the full comment verbatim from the feedback
 
 CRITICAL RULES:
 - target_text MUST be an exact, verbatim, contiguous substring from the document. Never invent or paraphrase.
 - Keep target_text as SHORT as possible while still being unique on the page.
-- For price changes like "$2 off" → "$3 off": target the price only ("$2") not the whole line.
-- If the same text appears multiple times, use the surrounding sentence context to pick the right occurrence, but target_text itself stays short.
-- NEVER omit any feedback item. If it's not a text change, use margin_note.`;
+- For price changes like "$2 off" → "$3 off": target only the price ("$2 off"), replacement = "$3 off".
+- NEVER omit any feedback item. If it is not a text change, use margin_note.`;
 
 function buildUserMessage(documentText: string, feedbackText: string): string {
   return [
@@ -83,27 +79,36 @@ function buildUserMessage(documentText: string, feedbackText: string): string {
   ].join("\n\n");
 }
 
+// OpenAI via raw fetch — no npm package needed, works in any Deno runtime
 async function generateWithOpenAI(documentText: string, feedbackText: string): Promise<EditInstruction[]> {
-  const client = new OpenAI({ apiKey: Deno.env.get("OPENAI_API_KEY") });
+  const apiKey = Deno.env.get("OPENAI_API_KEY")!;
 
-  const completion = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserMessage(documentText, feedbackText) },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "edit_instructions",
-        strict: true,
-        schema: EDIT_SCHEMA,
-      },
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildUserMessage(documentText, feedbackText) },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "edit_instructions", strict: true, schema: EDIT_SCHEMA },
+      },
+    }),
   });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned empty response");
+  if (!resp.ok) {
+    throw new Error(`OpenAI ${resp.status}: ${await resp.text()}`);
+  }
+
+  const data = await resp.json() as { choices: Array<{ message: { content: string | null } }> };
+  const content = data.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned empty content");
 
   const parsed = JSON.parse(content) as { edits: EditInstruction[] };
   return parsed.edits;
