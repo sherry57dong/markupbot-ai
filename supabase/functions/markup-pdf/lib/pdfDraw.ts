@@ -153,7 +153,8 @@ function addInsert(
 
 /**
  * Purple speech-bubble sticky note for image/layout comments.
- * Pinned to the right gutter so it's always visible and never overlaps content.
+ * Placed on the OPPOSITE side from the anchor text so the icon lands on the
+ * image/photo area (anchor text is usually in the text panel on the other side).
  */
 function addMarginNote(
   pdfDoc: PDFDocument,
@@ -163,7 +164,9 @@ function addMarginNote(
 ): void {
   const noteSize = 20;
   const { width: pageWidth } = page.getSize();
-  const noteX = pageWidth - noteSize - 8;
+  // If anchor text is in the right half, put icon on the left (photo side), and vice versa.
+  const anchorMidX = box.x + box.width / 2;
+  const noteX = anchorMidX > pageWidth / 2 ? 8 : pageWidth - noteSize - 8;
 
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),

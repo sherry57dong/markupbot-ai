@@ -85,6 +85,8 @@ CRITICAL RULES:
   GOOD: target_text="$100" — just the price that changes
   BAD: target_text="Air Sealing Caulk – $2 off" — whole line
   GOOD: target_text="$2 off" — just the price portion that changes
+  BAD: target_text="Room A/C Covers – $5 off" — whole line
+  GOOD: target_text="$5 off" — just the price portion that changes
 - page_hint is REQUIRED for margin_note (set to the page number). Set to null for all other types.
 - NEVER omit any feedback item. Every piece of feedback must produce at least one edit.`;
 
