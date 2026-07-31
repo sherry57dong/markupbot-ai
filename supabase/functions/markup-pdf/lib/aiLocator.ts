@@ -68,8 +68,13 @@ ACTION TYPES — choose exactly one per edit:
 
 CRITICAL RULES:
 - target_text MUST be an exact, verbatim, contiguous substring from the document. Never invent or paraphrase.
-- Keep target_text as SHORT as possible while still being unique on the page.
-- For price changes like "$2 off" → "$3 off": target only the price ("$2 off"), replacement = "$3 off".
+- MINIMUM target_text: target ONLY the specific word(s) that change, never the surrounding sentence.
+  BAD: target_text="Save up to $100 instantly on energy-efficient items" — too broad
+  GOOD: target_text="$100" with replacement_text="$80" — just the changing element
+  BAD: target_text="energy-efficient items that keep comfort up"
+  GOOD: target_text="energy-efficient" with replacement_text="energy-efficiency"
+- For bullet-line price changes (e.g. "Air Sealing Caulk – $2 off" → $3): target the WHOLE bullet line since the whole line needs to read differently. replacement_text = full new line text.
+- For margin_note about an image or photo: target_text must be text from the SAME PAGE as the image (e.g. the page headline or a nearby paragraph). Never use a logo name that appears on multiple pages.
 - NEVER omit any feedback item. If it is not a text change, use margin_note.`;
 
 function buildUserMessage(documentText: string, feedbackText: string): string {

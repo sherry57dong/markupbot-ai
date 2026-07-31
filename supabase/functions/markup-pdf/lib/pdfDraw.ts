@@ -93,9 +93,9 @@ function addStrikeoutAndReplace(
   replacementText: string,
 ): void {
   const { x, y, width, height } = box;
+  const { height: pageHeight } = page.getSize();
   const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
   const lineH = fontSize + 3;
-  // Estimate replacement text width (rough: 0.55× font size per char)
   const textW = Math.max(width, replacementText.length * fontSize * 0.55 + 6);
 
   // Red strikeout on old text
@@ -110,11 +110,15 @@ function addStrikeoutAndReplace(
     F: PDFNumber.of(4),
   });
 
-  // Red FreeText floating above — shows replacement inline
+  // Place FreeText above the strikeout if there's room; otherwise below.
+  // (PDF y-axis goes up, so "above" means higher y — if that exceeds the page, flip.)
+  const fitsAbove = y + height + 1 + lineH <= pageHeight;
+  const ftY = fitsAbove ? y + height + 1 : Math.max(0, y - lineH - 1);
+
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),
     Subtype: PDFName.of("FreeText"),
-    Rect: [x, y + height + 1, x + textW, y + height + 1 + lineH],
+    Rect: [x, ftY, x + textW, ftY + lineH],
     Contents: PDFString.of(replacementText),
     T: PDFString.of("MarkupBot AI"),
     DA: PDFString.of(`/Helv ${fontSize} Tf 0.85 0 0 rg`),
@@ -135,6 +139,7 @@ function addInsert(
   insertText: string,
 ): void {
   const { x, y, height } = box;
+  const { height: pageHeight } = page.getSize();
   const fontSize = Math.max(7, Math.min(box.fontSizeEstimate * 0.85, 11));
   const lineH = fontSize + 3;
   const textW = insertText.length * fontSize * 0.55 + 6;
@@ -152,11 +157,14 @@ function addInsert(
     Sy: PDFName.of("None"),
   });
 
-  // Green FreeText above — shows the text to be inserted
+  // Place FreeText above the caret if there's room; otherwise below
+  const fitsAbove = y + height + 1 + lineH <= pageHeight;
+  const ftY = fitsAbove ? y + height + 1 : Math.max(0, y - lineH - 1);
+
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),
     Subtype: PDFName.of("FreeText"),
-    Rect: [x - caretW, y + height + 1, x - caretW + textW, y + height + 1 + lineH],
+    Rect: [x - caretW, ftY, x - caretW + textW, ftY + lineH],
     Contents: PDFString.of(`^ ${insertText}`),
     T: PDFString.of("MarkupBot AI"),
     DA: PDFString.of(`/Helv ${fontSize} Tf 0 0.55 0 rg`),
@@ -178,7 +186,9 @@ function addMarginNote(
 ): void {
   const noteSize = 18;
   const { width: pageWidth } = page.getSize();
-  const noteX = Math.min(box.x + box.width + 14, pageWidth - noteSize - 6);
+  // Always pin to the right gutter so the icon is always visible,
+  // regardless of where the anchor text falls on the page.
+  const noteX = pageWidth - noteSize - 6;
 
   pushAnnotation(pdfDoc, page, {
     Type: PDFName.of("Annot"),
