@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { PRICE_CONFIG } from "../_shared/billing-config.ts";
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -78,6 +79,19 @@ Deno.serve(async (req) => {
       const cust = await custResp.json();
       customerId = cust.id;
       await supabase.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+    }
+
+    // Block addon purchases for non-subscribers
+    const planConfig = PRICE_CONFIG[price_id];
+    if (planConfig?.bucket === "addon") {
+      const { data: balance } = await supabase
+        .from("credit_balance")
+        .select("plan_credits_per_cycle")
+        .eq("account_id", user.id)
+        .single();
+      if (!balance || balance.plan_credits_per_cycle === 0) {
+        return json(403, { error: "Credit top-ups are available to active subscribers only. Please subscribe to a plan first." });
+      }
     }
 
     // Check if price is recurring to set correct checkout mode
