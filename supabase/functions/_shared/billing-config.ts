@@ -8,8 +8,11 @@ export interface PlanConfig {
 export const PRICE_CONFIG: Record<string, PlanConfig> = {
   // ── Test mode ─────────────────────────────────────────────────────────────
   "price_1U3UgBLxIo85N3edufhbrw1z": { credits: 50,   bucket: "subscription", name: "Starter Monthly" },
+  "price_1U3eBHLxIo85N3edLkQZlm4X": { credits: 50,   bucket: "subscription", name: "Starter Annual"  },
   "price_1U3UgCLxIo85N3edA2xah0dR": { credits: 300,  bucket: "subscription", name: "Agency Monthly"  },
+  "price_1U3eBHLxIo85N3edVuKj5dTh": { credits: 300,  bucket: "subscription", name: "Agency Annual"   },
   "price_1U3UgCLxIo85N3ed7jYsJkfn": { credits: 1500, bucket: "subscription", name: "Studio Monthly"  },
+  "price_1U3eBHLxIo85N3edxkrLPBWX": { credits: 1500, bucket: "subscription", name: "Studio Annual"   },
   "price_1U3UgCLxIo85N3ed7oA4IDFI": { credits: 50,   bucket: "addon",        name: "Credit Pack"     },
 
   // ── Live mode ─────────────────────────────────────────────────────────────

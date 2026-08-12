@@ -49,6 +49,20 @@ Deno.serve(async (req) => {
       .from("profiles").select("stripe_customer_id, email").eq("id", user.id).single();
 
     let customerId = profile?.stripe_customer_id;
+
+    // Validate stored customer ID belongs to the current Stripe mode.
+    // If it's from test mode and we're now in live mode (or vice versa), create a fresh one.
+    if (customerId) {
+      const check = await fetch(`https://api.stripe.com/v1/customers/${customerId}`, {
+        headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` },
+      });
+      const checkData = await check.json();
+      if (checkData.error) {
+        customerId = null;
+        await supabase.from("profiles").update({ stripe_customer_id: null }).eq("id", user.id);
+      }
+    }
+
     if (!customerId) {
       const custResp = await fetch("https://api.stripe.com/v1/customers", {
         method: "POST",

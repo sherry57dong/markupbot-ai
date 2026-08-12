@@ -1,0 +1,24 @@
+name: Monthly Credit Reset
+
+on:
+  schedule:
+    - cron: "0 0 1 * *"  # 1st of every month at midnight UTC
+  workflow_dispatch:       # allow manual trigger from GitHub UI for testing
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger monthly credit reset
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://yvgtcjodflprxoerthsi.supabase.co/functions/v1/monthly-credit-reset" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json")
+          body=$(echo "$response" | head -n1)
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Response: $body"
+          if [ "$status" != "200" ]; then
+            echo "Reset failed!" && exit 1
+          fi
