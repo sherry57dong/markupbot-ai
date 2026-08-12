@@ -7,10 +7,10 @@ export interface PlanConfig {
 // price_id → plan info. Add new prices here; never remove old ones (historic webhooks).
 export const PRICE_CONFIG: Record<string, PlanConfig> = {
   // ── Test mode ─────────────────────────────────────────────────────────────
-  "price_1U3RlLQ5RQnJpTB5ZzOLGRTw": { credits: 50,   bucket: "subscription", name: "Starter Monthly" },
-  "price_1U3RlMQ5RQnJpTB5gZugJp7f": { credits: 300,  bucket: "subscription", name: "Agency Monthly"  },
-  "price_1U3RlNQ5RQnJpTB5wNfWmyBh": { credits: 1500, bucket: "subscription", name: "Studio Monthly"  },
-  "price_1U3RlOQ5RQnJpTB5FTsitJDA": { credits: 50,   bucket: "addon",        name: "Credit Pack"     },
+  "price_1U3UgBLxIo85N3edufhbrw1z": { credits: 50,   bucket: "subscription", name: "Starter Monthly" },
+  "price_1U3UgCLxIo85N3edA2xah0dR": { credits: 300,  bucket: "subscription", name: "Agency Monthly"  },
+  "price_1U3UgCLxIo85N3ed7jYsJkfn": { credits: 1500, bucket: "subscription", name: "Studio Monthly"  },
+  "price_1U3UgCLxIo85N3ed7oA4IDFI": { credits: 50,   bucket: "addon",        name: "Credit Pack"     },
 
   // ── Live mode ─────────────────────────────────────────────────────────────
   "price_1U3Ps7LxIo85N3edggDLlQjX": { credits: 50,   bucket: "subscription", name: "Starter Monthly" },
